@@ -1,0 +1,17 @@
+{
+  "seed": 42,
+  "val_fraction": 0.25,
+  "orphan_query_fraction": 0.2,
+  "counts": {
+    "train_sub_images": 7176,
+    "train_sub_vehicles": 1156,
+    "val_query_images": 1261,
+    "val_query_vehicles": 385,
+    "val_gallery_images": 1119,
+    "val_gallery_vehicles": 341,
+    "val_paired_vehicles": 341,
+    "val_orphan_vehicles": 44,
+    "val_orphan_queries": 266,
+    "cameras_in_train_sub": 95
+  }
+}

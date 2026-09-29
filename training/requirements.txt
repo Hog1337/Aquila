@@ -1,0 +1,13 @@
+# Зафиксированные версии ключевых пакетов на момент обучения (28.09.2026)
+# Полный список — результат pip freeze на стенде разработчика.
+torch>=2.2.0,<2.5
+torchvision>=0.17.0,<0.20
+transformers>=4.44.0,<4.50
+numpy>=1.26.0,<2.0
+Pillow>=10.0.0,<11.0
+opencv-python>=4.8.0,<5.0
+scikit-learn>=1.3.0,<2.0
+scipy>=1.11.0,<2.0
+matplotlib>=3.7.0,<4.0
+tqdm>=4.65.0,<5.0
+ultralytics>=8.0.0,<9.0   # для YOLO (carseg, masked fine-tune)

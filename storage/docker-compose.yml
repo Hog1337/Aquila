@@ -1,0 +1,74 @@
+# Хранилище изображений галереи: SeaweedFS с S3-API (ТЗ п.6: свободное ПО, Docker, запуск одной командой).
+# Эмбеддинги и метаданные галереи хранятся в векторной СУБД, здесь лежат только сами кадры.
+#
+#   docker compose up -d --build --wait   # поднять хранилище (бакет создаётся автоматически)
+#   docker compose down                   # остановить, данные сохранятся в volume seaweedfs-data
+#
+# Без .env стек стартует с dev-ключами из значений по умолчанию (локальный запуск, проверка жюри).
+# На демо-хосте ключи задаёт деплой (см. .env.example); run.sh в корне генерирует случайные ключи.
+#
+# Образы собираются из Dockerfile (базовые образы скачиваются при сборке, ей нужен интернет); при запуске сеть не нужна.
+# Общее имя проекта у всех частей и корня: сеть и тома называются и помечаются одинаково при любом способе запуска
+name: falcon-reid
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  seaweedfs:
+    build:
+      context: .
+      args:
+        SEAWEEDFS_IMAGE: chrislusf/seaweedfs:${SEAWEEDFS_VERSION:-4.47}
+    image: ${STORAGE_IMAGE:-falcon-reid-seaweedfs:${SEAWEEDFS_VERSION:-4.47}}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-gallery}
+      S3_APP_ACCESS_KEY: ${S3_APP_ACCESS_KEY:-reidbackend}
+      S3_APP_SECRET_KEY: ${S3_APP_SECRET_KEY:-reidbackendsecretdevonly}
+      S3_ADMIN_ACCESS_KEY: ${S3_ADMIN_ACCESS_KEY:-reidadmin}
+      S3_ADMIN_SECRET_KEY: ${S3_ADMIN_SECRET_KEY:-reidadminsecretdevonly}
+      VOLUME_SIZE_LIMIT_MB: ${VOLUME_SIZE_LIMIT_MB:-1024}
+      # weed пишет служебные файлы в домашний каталог: уводим его в tmpfs, корневая ФС остаётся read-only
+      HOME: /tmp
+    volumes:
+      - seaweedfs-data:/data
+    ports:
+      # S3-API наружу. По умолчанию только localhost; для доступа с других машин задайте S3_BIND=0.0.0.0.
+      # Master (9333), filer (8888) и volume (8080) не публикуются: они нужны только внутри контейнера.
+      - "${S3_BIND:-127.0.0.1}:${S3_PORT:-8333}:8333"
+    networks:
+      - reid
+    healthcheck:
+      # Порт S3 слушается И бакет создан (скрипт запуска кладёт флаг /tmp/bucket.ready)
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8333 && test -f /tmp/bucket.ready"]
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 30
+    restart: unless-stopped
+    # Не root: пользователь seaweed (uid 1000) из образа владеет каталогом /data, том наследует эти права
+    user: "1000:1000"
+    # weed останавливается ~20 с (сброс томов на диск); при лимите по умолчанию в 10 с его убивал бы SIGKILL
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Значение берётся из ./.env в корне решения (см. .env.example). Реальной памяти процесс берёт ~0,2 ГБ, остальное кэш файлов
+    mem_limit: ${SEAWEEDFS_MEM_LIMIT:-1536m}
+    pids_limit: 1024
+    logging: *default-logging
+
+networks:
+  # Общая сеть решения: backend инференса подключается к ней и ходит в S3 по адресу http://seaweedfs:8333
+  reid:
+    name: falcon-reid
+
+volumes:
+  seaweedfs-data:

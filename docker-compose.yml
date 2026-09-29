@@ -1,0 +1,19 @@
+# Всё решение одной командой:  docker compose up --build -d --wait
+#   UI:  http://localhost:8080   (FRONTEND_PORT)
+#   S3:  http://localhost:8333   (S3_PORT, только localhost; см. storage/.env.example)
+#   Qdrant: http://localhost:6333/dashboard  (QDRANT_HTTP_PORT, только localhost; ключ API см. vector/.env.example)
+#   PostgreSQL: localhost:5432  (POSTGRES_PORT, только localhost; пароли см. postgres/.env.example)
+#
+# Компоненты остаются независимыми микросервисами (ТЗ п.6): у каждого свой compose-файл,
+# здесь они только собираются вместе. Backend инференса добавляется сюда же отдельной строкой include;
+# backend подключается к сети falcon-reid, ходит в S3 по http://seaweedfs:8333, в Qdrant по http://qdrant:6333
+# и в PostgreSQL по postgres:5432 (БД reid, схема reid, роль POSTGRES_APP_USER).
+name: falcon-reid
+
+include:
+  - path: frontend/docker-compose.yml
+  - path: storage/docker-compose.yml
+  - path: vector/docker-compose.yml
+  - path: postgres/docker-compose.yml
+  - path: backend/docker-compose.yml
+  - path: inference/docker-compose.yml

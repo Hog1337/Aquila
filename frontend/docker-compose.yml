@@ -1,0 +1,43 @@
+# Запуск фронтенда одной командой:  docker compose up --build
+# UI: http://localhost:8080  (порт меняется через FRONTEND_PORT)
+#
+# Backend инференса — отдельный микросервис. В общем docker-compose решения он должен
+# называться `backend` и слушать порт 8000, либо задайте API_UPSTREAM.
+#
+# Зависимости npm скачиваются при сборке образа (ей нужен интернет); при запуске сеть не нужна.
+# Общее имя проекта у всех частей и корня: сеть и тома называются и помечаются одинаково при любом способе запуска
+name: falcon-reid
+
+services:
+  frontend:
+    image: ${FRONTEND_IMAGE:-falcon-reid-frontend:latest}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    environment:
+      API_UPSTREAM: ${API_UPSTREAM:-http://backend:8000}
+    restart: unless-stopped
+    # nginx-unprivileged пишет только в /tmp (pid, кэши) и генерирует конфиг из шаблона в conf.d
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${FRONTEND_MEM_LIMIT:-128m}
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - reid
+
+networks:
+  reid:
+    name: falcon-reid

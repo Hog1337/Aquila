@@ -1,0 +1,104 @@
+# Векторная СУБД галереи: Qdrant (ТЗ п.6: свободное ПО, Docker, запуск одной командой).
+# Здесь лежат эмбеддинги (float32, 2048) и метаданные объектов галереи; сами кадры хранятся в SeaweedFS (storage/).
+#
+#   docker compose up -d --build --wait   # поднять Qdrant и создать коллекцию `gallery`
+#   docker compose down                   # остановить, данные сохранятся в volume qdrant-data
+#
+# Без .env стек стартует с dev-ключом из значений по умолчанию (локальный запуск, проверка жюри).
+# На демо-хосте ключ задаёт деплой (см. .env.example); run.sh в корне генерирует случайный ключ.
+#
+# Образы собираются из Dockerfile (базовые образы скачиваются при сборке, ей нужен интернет); при запуске сеть не нужна.
+# Общее имя проекта у всех частей и корня: сеть и тома называются и помечаются одинаково при любом способе запуска
+name: falcon-reid
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  qdrant:
+    build:
+      context: .
+      target: server
+      args:
+        QDRANT_IMAGE: qdrant/qdrant:${QDRANT_VERSION:-v1.19.1}
+    image: ${QDRANT_SERVER_IMAGE:-falcon-reid-qdrant:${QDRANT_VERSION:-v1.19.1}}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-reidqdrantdevonly}
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      # REST (6333, там же веб-панель /dashboard) и gRPC (6334) наружу. По умолчанию только localhost;
+      # для доступа с других машин задайте QDRANT_BIND=0.0.0.0 (ключ API при этом обязателен).
+      - "${QDRANT_BIND:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_BIND:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
+    networks:
+      - reid
+    healthcheck:
+      # В образе Qdrant нет curl и wget, только bash: шлём HTTP-запрос через /dev/tcp.
+      # /readyz открыт без ключа API.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/6333 &&
+          printf 'GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          head -n1 <&3 | grep -q ' 200 '
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 20
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Для галереи порядка 10^6 объектов float32 (~2 ГБ) лимит стоит поднять или включить QDRANT_QUANTIZATION=scalar
+    mem_limit: ${QDRANT_MEM_LIMIT:-1g}
+    pids_limit: 1024
+    logging: *default-logging
+
+  # Одноразовая инициализация: создаёт коллекцию и индексы полей. Идемпотентна, при повторном
+  # запуске проверяет, что размерность коллекции совпадает с EMBEDDING_DIM, и ничего не меняет.
+  qdrant-init:
+    build:
+      context: .
+      target: init
+    image: ${QDRANT_INIT_IMAGE:-falcon-reid-qdrant-init:${QDRANT_VERSION:-v1.19.1}}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-reidqdrantdevonly}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-gallery}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-2048}
+      QDRANT_QUANTIZATION: ${QDRANT_QUANTIZATION:-none}
+      HNSW_M: ${HNSW_M:-16}
+      HNSW_EF_CONSTRUCT: ${HNSW_EF_CONSTRUCT:-128}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    networks:
+      - reid
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *default-logging
+
+networks:
+  # Общая сеть решения: backend инференса подключается к ней и ходит в Qdrant по адресу http://qdrant:6333
+  reid:
+    name: falcon-reid
+
+volumes:
+  qdrant-data:

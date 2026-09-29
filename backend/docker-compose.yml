@@ -1,0 +1,64 @@
+# Backend инференса: FastAPI-сервер с REST API /api/v1/*
+# Общается с PostgreSQL, Qdrant, SeaweedFS и Inference-сервисом.
+# Добавляется в общий стек через include: в корневом docker-compose.yml.
+name: falcon-reid
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: ${BUILD_NETWORK:-default}
+    image: ${BACKEND_IMAGE:-falcon-reid-backend:latest}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      POSTGRES_DSN: postgresql://${POSTGRES_APP_USER:-reidbackend}:${POSTGRES_APP_PASSWORD:-reidbackenddevonly}@postgres:5432/reid
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-gallery}
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_ACCESS_KEY: ${S3_APP_ACCESS_KEY:-reidbackend}
+      S3_SECRET_KEY: ${S3_APP_SECRET_KEY:-reidbackendsecretdevonly}
+      S3_BUCKET: ${S3_BUCKET:-gallery}
+      INFERENCE_URL: http://inference:8001
+      DEFAULT_THRESHOLD: ${DEFAULT_THRESHOLD:-0.84}
+      HOST: 0.0.0.0
+      PORT: 8000
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    networks:
+      - reid
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import httpx; r = httpx.get('http://localhost:8000/api/v1/status'); assert r.status_code == 200"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${BACKEND_MEM_LIMIT:-512m}
+    pids_limit: 256
+    logging: *default-logging
+
+networks:
+  reid:
+    name: falcon-reid

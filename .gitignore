@@ -1,0 +1,24 @@
+# Docker volumes / runtime data
+postgres/data/
+storage/data/
+vector/data/
+
+# Environment files (contain secrets)
+.env
+postgres/.env
+backend/.env
+inference/.env
+vector/.env
+storage/.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Misc
+*.swp
+*.swo
+.DS_Store
+
+# Резервные копии данных (scripts/backup.sh) и генерируемые секреты
+backups/

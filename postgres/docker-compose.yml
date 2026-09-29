@@ -1,0 +1,105 @@
+# Реляционная СУБД решения: обычный PostgreSQL для метаданных (ТЗ п.6: свободное ПО, Docker, запуск одной командой).
+# Здесь лежат каталог галереи, история поиска и результатов, порог отказа, метрики и задания экспорта.
+# Эмбеддинги галереи и векторный поиск: Qdrant (vector/), сами кадры: SeaweedFS (storage/).
+#
+#   docker compose up -d --build --wait   # поднять PostgreSQL и применить миграции
+#   docker compose down                   # остановить, данные сохранятся в volume postgres-data
+#
+# Без .env стек стартует с dev-паролями из значений по умолчанию (локальный запуск, проверка жюри).
+# На демо-хосте пароли задаёт деплой (см. .env.example); run.sh в корне генерирует случайные пароли.
+#
+# Образы собираются из Dockerfile (базовые образы скачиваются при сборке, ей нужен интернет); при запуске сеть не нужна.
+# Общее имя проекта у всех частей и корня: сеть и тома называются и помечаются одинаково при любом способе запуска
+name: falcon-reid
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    build:
+      context: .
+      target: server
+      args:
+        POSTGRES_IMAGE: postgres:${POSTGRES_VERSION:-17}-alpine
+    image: ${POSTGRES_SERVER_IMAGE:-falcon-reid-postgres:${POSTGRES_VERSION:-17}-alpine}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-reid}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-reidadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-reidpostgresdevonly}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      # По умолчанию только localhost; для доступа с других машин задайте POSTGRES_BIND=0.0.0.0 (пароли при этом обязательны).
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - reid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 20
+    restart: unless-stopped
+    # Быстрая остановка: SIGINT, при выключении PostgreSQL успевает сделать checkpoint
+    stop_signal: SIGINT
+    stop_grace_period: 60s
+    # Ограничения контейнера: файловая система только для чтения (пишется лишь volume и tmpfs),
+    # из привилегий остаются те, что нужны entrypoint-у образа для chown каталога данных
+    # и переключения на пользователя postgres
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    pids_limit: 512
+    logging: *default-logging
+
+  # Одноразовая инициализация: роль backend-а и миграции схемы. Идемпотентна, при повторном запуске ничего не меняет.
+  postgres-init:
+    build:
+      context: .
+      target: init
+      args:
+        POSTGRES_IMAGE: postgres:${POSTGRES_VERSION:-17}-alpine
+    image: ${POSTGRES_INIT_IMAGE:-falcon-reid-postgres-init:${POSTGRES_VERSION:-17}-alpine}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-reid}
+      PGUSER: ${POSTGRES_ADMIN_USER:-reidadmin}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:-reidpostgresdevonly}
+      APP_DB_USER: ${POSTGRES_APP_USER:-reidbackend}
+      APP_DB_PASSWORD: ${POSTGRES_APP_PASSWORD:-reidbackenddevonly}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-2048}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - reid
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *default-logging
+
+networks:
+  # Общая сеть решения: backend инференса подключается к ней и ходит в БД по адресу postgres:5432
+  reid:
+    name: falcon-reid
+
+volumes:
+  postgres-data:

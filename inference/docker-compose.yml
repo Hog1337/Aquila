@@ -1,0 +1,63 @@
+# Inference сервис: FastAPI + PyTorch + ReID модель (JDNF_BNNECK_PROTO2).
+# Принимает crop авто, возвращает эмбеддинг 2048 float (L2-norm).
+# Добавляется в общий стек через include: в корневом docker-compose.yml.
+name: falcon-reid
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: ${BUILD_NETWORK:-default}
+    image: ${INFERENCE_IMAGE:-falcon-reid-inference:latest}
+    pull_policy: ${BUILT_PULL_POLICY:-build}
+    runtime: nvidia
+    environment:
+      DINO_DIR: /app/weights/dinov3-vitl16-bf16
+      CKPT_PATH: /app/weights/JDNFV_MASKED_FT_best_fp16.pt
+      MODEL_VERSION: JDNFV_MASKED_FT
+      YOLO_CKPT_PATH: /app/weights/yolo11s-seg.pt
+      TRITON_CACHE_DIR: /tmp
+      DEVICE: auto
+      SIZE: 320
+      HOST: 0.0.0.0
+      PORT: 8001
+      NVIDIA_VISIBLE_DEVICES: all
+    ports:
+      - "127.0.0.1:${INFERENCE_PORT:-8001}:8001"
+    networks:
+      - reid
+    volumes:
+      # Одной директорией, а не двумя точечными bind-mount'ами: если host-путь недоступен для Docker Desktop
+      # (см. docs/backend.md, «сетевой диск»), точечный bind-mount ОДНОГО ФАЙЛА создаёт в контейнере пустую
+      # директорию вместо файла (CKPT_PATH становится директорией, torch.load падает Errno 21) — с директорией
+      # такого не происходит для отдельных файлов внутри.
+      - ./weights:/app/weights:ro
+      - /home/limon/data/university/lct/data/reid/images:/data/images:ro
+    # /health отвечает 200 и без модели (status: degraded), поэтому проверяем именно "ok": модель и чекпоинт загружены.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8001/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      start_period: 180s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:exec,size=1G
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${INFERENCE_MEM_LIMIT:-4g}
+    pids_limit: 256
+    logging: *default-logging
+
+networks:
+  reid:
+    name: falcon-reid

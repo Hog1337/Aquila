@@ -1,0 +1,14 @@
+# Скрипты, которые монтируются в Linux-контейнеры, всегда с LF (CRLF ломает `sh`)
+*.sh text eol=lf
+# Файлы, попадающие в контейнеры или исполняемые в них, всегда с LF (иначе на Windows в образ уедет CRLF)
+*.env.example text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+*.sql text eol=lf
+Makefile text eol=lf
+*.env text eol=lf
+*.md text eol=lf
+# Веса модели (чекпоинты ReID) хранятся в Git LFS, обычным блобом они не пушатся
+inference/weights/**/*.pt filter=lfs diff=lfs merge=lfs -text
+inference/weights/**/*.safetensors filter=lfs diff=lfs merge=lfs -text
