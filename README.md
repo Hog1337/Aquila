@@ -14,11 +14,59 @@
 ### 1. Клонирование и подготовка
 
 ```bash
-git clone <репозиторий> aquila && cd aquila
+git clone https://github.com/Hog1337/Aquila.git aquila && cd aquila
 git lfs pull           # веса модели ~0.9 ГБ (bf16 backbone + LoRA + YOLO)
 ```
 
-### 2. Запуск стека
+### 2. Запуск на закрытом тесте (одна команда)
+
+Скрипт сам поднимет стек (если ещё не запущен), импортирует данные,
+выполнит поиск и сохранит три файла сдачи.
+
+```bash
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank
+```
+
+Параметры:
+
+| Флаг | Описание |
+|------|----------|
+| `--input DIR` | Каталог с `images/`, `test_gallery.csv`, `test_query.csv` |
+| `--output DIR` | Куда сохранить результаты |
+| `--threshold N` | Порог отказа (по умолчанию **0.87**) |
+| `--rerank` | Использовать Query Expansion (рекомендуется) |
+| `--clear-before` | Очистить volumes перед импортом (старт с чистого листа) |
+| `--clear-after` | Удалить импортированные данные из галереи после завершения  
+  (стек остаётся запущенным, можно сразу прогнать следующий тест) |
+| `--gallery-csv NAME` | Имя CSV галереи (по умолч. `test_gallery.csv`) |
+| `--query-csv NAME` | Имя CSV запросов (по умолч. `test_query.csv`) |
+| `--gt-csv PATH` | Ground truth CSV для подсчёта метрик (mAP@10, Rank-1/5) |
+
+**Результат:** в `--output` появляются `submission.csv`, `embeddings.npy`, `candidates.csv`.
+
+#### Примеры
+
+```bash
+# Минимальный запуск (стек поднимется автоматически)
+scripts/submit.sh --input /path/to/test --output /path/to/out
+
+# С реранжированием (рекомендуется)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank
+
+# Полный цикл для одного теста
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --clear-before
+
+# Прогнать тест и очистить данные (для нескольких тестов подряд)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --clear-after
+
+# С подсчётом метрик (если известен ground truth)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --gt-csv val_gt.csv
+```
+
+### 3. Запуск стека (опционально)
+
+Если нужно запустить стек отдельно — например, чтобы работать через веб-интерфейс
+или вручную загрузить данные перед тестом:
 
 ```bash
 ./run.sh               # сборка образов + запуск (нужен интернет при запуске без параметров)
@@ -30,38 +78,42 @@ git lfs pull           # веса модели ~0.9 ГБ (bf16 backbone + LoRA +
 | `--registry` | Использовать образы из GitLab Registry (без сборки) |
 | `--local` | Использовать уже собранные локальные образы (без сборки, без пулла) |
 | `--down` | Остановить стек (данные в volume сохраняются) |
-| `SKIP_SERVICES="inference"` | Не поднимать указанные сервисы (через пробел). Без GPU: `SKIP_SERVICES="inference"` |
 
-### 3. Запуск на закрытом тесте (одна команда)
-
-Организаторы передают каталог с `images/` + CSV. Решение принимает его
-и возвращает три файла сдачи.
-
-```bash
-# Всё в одной команде: очистка → сборка → импорт → экспорт → 3 файла
-scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --clear
-```
-
-Параметры:
-
-| Флаг | Описание |
-|------|----------|
-| `--input DIR` | Каталог с `images/`, `test_gallery.csv`, `test_query.csv` |
-| `--output DIR` | Куда сохранить результаты |
-| `--threshold N` | Порог отказа (по умолчанию 0.87) |
-| `--rerank` | Использовать Query Expansion (рекомендуется) |
-| `--clear` | Очистить данные перед запуском |
-| `--no-cleanup` | Не удалять данные после завершения |
+| `--clear-before` | Очистить volumes перед импортом (старт с чистого листа) |
+| `--clear-after` | Удалить импортированные данные из галереи после завершения  
+  (стек остаётся запущенным, можно сразу прогнать следующий тест) |
 | `--gallery-csv NAME` | Имя CSV галереи (по умолч. `test_gallery.csv`) |
 | `--query-csv NAME` | Имя CSV запросов (по умолч. `test_query.csv`) |
+| `--gt-csv PATH` | Ground truth CSV для подсчёта метрик (mAP@10, Rank-1/5) |
 
 **Результат:** в `--output` появляются `submission.csv`, `embeddings.npy`, `candidates.csv`.
 
-Также доступен **веб-интерфейс** на `http://localhost:8081` — через него можно
-вручную загрузить данные, выполнить поиск, посмотреть метрики и выбрать порог отказа.
-Для пакетного прогона на закрытом тесте используйте CLI (одна команда выше).
+#### Примеры
 
-Или напрямую, без обёртки:
+```bash
+# Минимальный запуск (стек поднимется автоматически)
+scripts/submit.sh --input /path/to/test --output /path/to/out
+
+# С реранжированием (рекомендуется)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank
+
+# С очисткой и реранжированием — полный цикл для одного теста
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --clear-before
+
+# Прогнать тест, потом очистить данные (полезно для нескольких тестов подряд)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --clear-after
+
+# С подсчётом метрик (если известен ground truth)
+scripts/submit.sh --input /path/to/test --output /path/to/out --rerank --gt-csv val_gt.csv
+```
+
+> Если нужно сначала запустить стек отдельно — см. раздел 3.
+> `submit.sh` сам поднимет стек, если тот ещё не запущен.
+
+Также доступен **веб-интерфейс** на `http://localhost:8080` — через него можно
+вручную загрузить данные, выполнить поиск, посмотреть метрики и выбрать порог отказа.
+
+Запуск без обёртки (напрямую, без `submit.sh`):
 
 ```bash
 docker compose run --rm \
@@ -75,7 +127,7 @@ docker compose run --rm \
 
 ```bash
 scripts/smoke.sh        # все сервисы healthy?
-curl -s localhost:8081  # UI доступен?
+curl -s localhost:8080  # UI доступен?
 ```
 
 ### 5. Очистка
@@ -101,7 +153,7 @@ docker compose down -v  # удалить все данные
 
 | Компонент | Каталог | Роль |
 |---|---|---|
-| Frontend | `frontend/` | React + nginx, порт 8081 |
+| Frontend | `frontend/` | React + nginx, порт 8080 (по умолчанию, меняется через FRONTEND_PORT) |
 | Backend | `backend/` | FastAPI, порт 8000 |
 | Inference | `inference/` | DINOv3 + LoRA + YOLO, порт 8001, GPU |
 | Qdrant | `vector/` | Векторная БД, 2048d, Cosine |

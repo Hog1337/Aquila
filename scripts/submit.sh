@@ -6,40 +6,39 @@
 # --input должен содержать images/ (плоский каталог кадров) и CSV галереи/запросов
 # (по умолчанию test_gallery.csv / test_query.csv).
 #
-# Поднимает весь стек (если он ещё не запущен), монтирует --input и --output в контейнер backend
-# и выполняет там `python -m app.cli submit`, который импортирует данные и сразу формирует
-# submission.csv, embeddings.npy, candidates.csv в --output.
-#
-# Если указан --gt-csv, после экспорта запускается оценка качества (mAP, Rank-1/5).
+# Если стек уже запущен — использует его (без пересборки). Если нет — поднимает через ./run.sh.
+# По умолчанию стек и данные сохраняются после завершения.
 #
 # Флаги:
-#   --gt-csv PATH    — ground truth для валидации после экспорта
-#   --clear          — очистить volumes перед запуском
-#   --no-cleanup     — НЕ удалять данные после завершения (оставить стек запущенным)
-#   --rerank         — использовать Query Expansion
-#   --threshold N    — порог отказа (по умолчанию 0.87)
-#   --gallery-csv NAME, --query-csv NAME — имена CSV внутри --input
+#   --gt-csv PATH         — ground truth для валидации после экспорта
+#   --clear-before        — очистить volumes перед импортом (старт с чистого листа)
+#   --clear-after         — удалить импортированные данные из галереи после завершения
+#                          (стек остаётся запущенным)
+#   --rerank              — использовать Query Expansion
+#   --threshold N         — порог отказа (по умолчанию 0.87)
+#   --gallery-csv NAME    — имя CSV галереи внутри --input (по умолч. test_gallery.csv)
+#   --query-csv NAME      — имя CSV запросов внутри --input (по умолч. test_query.csv)
 set -eu
 
 INPUT=""
 OUTPUT=""
 EXTRA_ARGS=""
 GT_CSV=""
-NO_CLEANUP=0
-CLEAR=0
+CLEAR_BEFORE=0
+CLEAR_AFTER=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --input) INPUT="$2"; shift 2 ;;
     --output) OUTPUT="$2"; shift 2 ;;
     --gt-csv) GT_CSV="$2"; shift 2 ;;
+    --clear-before) CLEAR_BEFORE=1; shift ;;
+    --clear-after) CLEAR_AFTER=1; shift ;;
     --threshold) EXTRA_ARGS="$EXTRA_ARGS --threshold $2"; shift 2 ;;
     --gallery-csv) EXTRA_ARGS="$EXTRA_ARGS --gallery-csv $2"; shift 2 ;;
     --query-csv) EXTRA_ARGS="$EXTRA_ARGS --query-csv $2"; shift 2 ;;
     --rerank) EXTRA_ARGS="$EXTRA_ARGS --rerank"; shift ;;
-    --no-cleanup) NO_CLEANUP=1; shift ;;
-    --clear) CLEAR=1; shift ;;
-    *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;
+    *) echo "Неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -47,11 +46,14 @@ if [ -z "$INPUT" ] || [ -z "$OUTPUT" ]; then
   echo "Использование: $0 --input <каталог с images/+CSV> --output <каталог для результата>" >&2
   echo ""
   echo "Опции:"
-  echo "  --gt-csv PATH     ground truth CSV для валидации (image_id,vehicle_id,camera_id,split)"
-  echo "  --clear           очистить volumes перед запуском"
-  echo "  --no-cleanup      не удалять данные после завершения"
-  echo "  --rerank          использовать Query Expansion"
-  echo "  --threshold N     порог отказа (по умолчанию 0.87)"
+  echo "  --gt-csv PATH       ground truth CSV (image_id,vehicle_id,camera_id,split)"
+  echo "  --clear-before      очистить volumes перед импортом"
+  echo "  --clear-after       удалить импортированные данные из галереи после завершения"
+  echo "                       (стек остаётся запущенным)"
+  echo "  --rerank            использовать Query Expansion"
+  echo "  --threshold N       порог отказа (по умолчанию 0.87)"
+  echo "  --gallery-csv NAME  CSV галереи (по умолч. test_gallery.csv)"
+  echo "  --query-csv NAME    CSV запросов (по умолч. test_query.csv)"
   exit 1
 fi
 if [ ! -d "$INPUT" ]; then
@@ -59,6 +61,8 @@ if [ ! -d "$INPUT" ]; then
   exit 1
 fi
 mkdir -p "$OUTPUT"
+# Гостевой доступ: контейнер может бегать от root или другого пользователя
+chmod 777 "$OUTPUT"
 
 # Абсолютные пути
 INPUT_ABS=$(cd "$INPUT" && pwd)
@@ -80,30 +84,30 @@ if command -v cygpath >/dev/null 2>&1; then
   export MSYS_NO_PATHCONV=1
 fi
 
-cd "$(dirname "$0")/.."   # корень решения (aquila/)
+cd "$(dirname "$0")/.."   # корень решения
 
-if [ -n "$(docker compose ps -q 2>/dev/null)" ] && [ "$NO_CLEANUP" = 0 ]; then
-  echo "[submit] Стек уже запущен: после завершения docker compose down -v сотрёт данные." >&2
-fi
-
-# Очистка перед запуском
-if [ "$CLEAR" = 1 ]; then
+# Очистка перед запуском (--clear-before)
+if [ "$CLEAR_BEFORE" = 1 ]; then
   echo "[submit] Очищаю volumes (docker compose down -v)..."
   docker compose down -v 2>/dev/null || true
 fi
 
+# Очистка после завершения (--clear-after): удалить импортированные данные, стек не трогать
 cleanup() {
-  if [ "$NO_CLEANUP" = 1 ]; then
-    echo "[submit] Пропускаю очистку (--no-cleanup). Стек и данные сохранены."
-  else
-    echo "[submit] Останавливаю стек и удаляю volumes (docker compose down -v)..."
-    docker compose down -v 2>/dev/null || true
+  if [ "$CLEAR_AFTER" = 1 ]; then
+    echo "[submit] Очищаю импортированные данные из галереи (python -m app.cli clear)..."
+    docker compose run --rm backend python -m app.cli clear 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-echo "[submit] Поднимаю стек (./run.sh)..."
-./run.sh
+# Поднимаем стек, только если ещё не запущен
+if docker compose ps -q 2>/dev/null | grep -q .; then
+  echo "[submit] Стек уже запущен. Использую текущий."
+else
+  echo "[submit] Стек не запущен. Поднимаю (./run.sh)..."
+  ./run.sh
+fi
 
 echo "[submit] Запускаю python -m app.cli submit --input /input --output /output $EXTRA_ARGS"
 # shellcheck disable=SC2086
@@ -118,13 +122,15 @@ if [ -n "$GT_ABS" ]; then
   echo "═══════════════════════════════════════════════════════════════"
   echo "  ОЦЕНКА КАЧЕСТВА (--gt-csv)"
   echo "═══════════════════════════════════════════════════════════════"
-  # Определяем имена CSV для полной оценки (embeddings + candidates)
-  GALLERY_CSV="${EXTRA_ARGS##*--gallery-csv }"  # хрупкий парсинг, но для простоты
-  GALLERY_CSV="${GALLERY_CSV%% *}"
-  [ -z "$GALLERY_CSV" ] && GALLERY_CSV="test_gallery.csv"
-  QUERY_CSV="${EXTRA_ARGS##*--query-csv }"
-  QUERY_CSV="${QUERY_CSV%% *}"
-  [ -z "$QUERY_CSV" ] && QUERY_CSV="test_query.csv"
+  # Парсим имена CSV из EXTRA_ARGS (если заданы)
+  GALLERY_CSV="test_gallery.csv"
+  QUERY_CSV="test_query.csv"
+  for arg in $EXTRA_ARGS; do
+    case "$arg" in
+      --gallery-csv=*) GALLERY_CSV="${arg#*=}" ;;
+      --query-csv=*) QUERY_CSV="${arg#*=}" ;;
+    esac
+  done
 
   docker compose run --rm \
     -v "$OUTPUT_ABS":/output \
